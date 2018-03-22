@@ -76,6 +76,9 @@ Resources:
           - arn:${Partition}:iam::aws:policy/service-role/AWSConfigRole
           - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
         - !Sub
+          - arn:${Partition}:iam::aws:policy/ReadOnlyAccess
+          - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
+        - !Sub
           - arn:${Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess
           - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
         - !Sub
@@ -97,6 +100,15 @@ Resources:
                 Action:
                   - 'kms:GetKeyRotationStatus'
                   - 'kms:ListKeys'
+                Resource: '*'
+        - PolicyName: GuardDutyReadOnly
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'guarddduty:GetDetector'
+                  - 'guarddduty:ListDetectors'
                 Resource: '*'
 
 #==================================================================================================
@@ -2322,6 +2334,157 @@ Resources:
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 5.1   Ensure GuardDuty is enabled (Not Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateGuardDutyIsEnabledLambdaInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Condition: IsLevel2
+    DependsOn:
+        - FunctionForEvaluateGuardDutyIsEnabled
+        - ResourceForEvaluateCISBenchmarkPreconditions
+    Properties:
+      FunctionName: !GetAtt
+        - FunctionForEvaluateGuardDutyIsEnabled
+        - Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: config.amazonaws.com
+
+  FunctionForEvaluateGuardDutyIsEnabled:
+    Type: 'AWS::Lambda::Function'
+    Condition: IsLevel2
+    DependsOn:
+      - MasterConfigRole
+      - ResourceForEvaluateCISBenchmarkPreconditions
+    Properties:
+      FunctionName: WELLNESS-EvaluateGuardDutyIsEnabled
+      Description: Evaluates whether VPC flow logging is enabled
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import datetime
+
+          def lambda_handler(event, context):
+
+            regions = get_regions()
+            events_rules = get_events_rules(regions)
+
+            is_compliant = True
+            evaluations = []
+            annotation = []
+            result_token = 'No token found.'
+            if 'resultToken' in event: result_token = event['resultToken']
+
+            # Determine whether each region has GuardDuty enabled and that an alarm
+            # is configured.
+            for region in regions:
+
+              client = boto3.client('guardduty', region_name=region)
+
+              response = client.list_detectors()
+
+              if not response['DetectorIds']:
+                evaluations.append(put_evaluation(region, False, 'GuardDuty is not enabled'))
+
+              else:
+                for detector_id in response['DetectorIds']:
+                  response = client.get_detector(DetectorId=detector_id)
+
+                  if response['Status'] != 'ENABLED':
+                    evaluations.append(put_evaluation(region, False, 'GuardDuty is suspended'))
+
+                  else:
+
+                    rule_exists = False
+
+                    # If GuardDuty is enabled, then determine whether notifictions are enabled.
+                    for rule in events_rules[region]:
+                      if 'EventPattern' in rule and 'aws.guardduty' in rule['EventPattern']:
+                        rule_exists = True
+
+                        if rule['State'] != 'ENABLED':
+                          evaluations.append(put_evaluation(region, False, 'GuardDuty CloudWatch event rule exists but is not enabled'))
+
+                    if not rule_exists:
+                      evaluations.append(put_evaluation(region, False, 'No CloudWatch event rule is enabled for GuardDuty events'))
+
+                    else:
+                      evaluations.append(put_evaluation(region, True, ''))
+
+            if 'resultToken' in event:
+              boto3.client('config').put_evaluations(
+                Evaluations = evaluations,
+                ResultToken = result_token
+              )
+            else:
+              print(evaluations)
+
+
+          def put_evaluation(region, is_compliant, annotation):
+
+            evaluation = {
+              'ComplianceResourceType': 'AWS::Config::ConfigurationRecorder',
+              'ComplianceResourceId': region,
+              'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+              'OrderingTimestamp': datetime.datetime.now()
+              }
+
+            if annotation: evaluation['Annotation'] = annotation
+
+            return evaluation
+
+          def get_regions():
+
+              client = boto3.client('ec2')
+              region_response = client.describe_regions()
+              regions = [region['RegionName'] for region in region_response['Regions']]
+              if 'ap-northeast-3' in regions:
+                  regions.remove('ap-northeast-3')
+
+              return regions
+
+          def get_events_rules(regions):
+
+              events_rules = dict()
+              for region in regions:
+
+                client = boto3.client('events', region_name=region)
+                response = client.list_rules()
+                events_rules[region] = response['Rules']
+
+              return events_rules
+
+
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !GetAtt
+        - MasterConfigRole
+        - Arn
+      Runtime: python3.6
+      Timeout: 30
+
+  ConfigRuleForEvaluateGuardDutyIsEnabled:
+    Type: 'AWS::Config::ConfigRule'
+    Condition: IsLevel2
+    DependsOn:
+      - FunctionForEvaluateGuardDutyIsEnabled
+      - EvaluateGuardDutyIsEnabledLambdaInvokePermission
+      - ResourceForEvaluateCISBenchmarkPreconditions
+    Properties:
+      ConfigRuleName: WELLNESS-EvaluateGuardDutyIsEnabled
+      Description: >-
+        CIS 5.1   Ensure GuardDuty is enabled (Not Scored)
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ScheduledNotification
+            MaximumExecutionFrequency: TwentyFour_Hours
+        SourceIdentifier: !GetAtt
+          - FunctionForEvaluateGuardDutyIsEnabled
+          - Arn
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
 # CIS AWS Foundations Benchmark - Alarm Notification Topic - NotificationEmailAddressForCloudWatchAlarms
 # Any reporting / alerts to end user should be via an SNS Topic – the subscriber is the provided email address
 # --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2446,7 +2609,7 @@ Resources:
   # Enable Macie Alarms (Macie automation is not yet supported)
   #==================================================
   # Create a CloudWatch rule for Macie events.
-  DetectGuardDutyEvents:
+  DetectMacieEvents:
     Type: AWS::Events::Rule
     Properties:
       Name: WELLNESS-DetectMacieActivities
