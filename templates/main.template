@@ -10,10 +10,11 @@ Metadata:
           - ProfileLevel
           - NotificationEmailAddressForCloudWatchAlarms
       - Label:
-            default: Configure AWS Cloudtrail and AWS Config (Optional)
+            default: Configure additional governance services (Optional)
         Parameters:
           - ConfigureCloudtrail
           - ConfigureConfig
+          - ConfigureGuardDuty
       - Label:
             default: AWS Quick Start Configuration
         Parameters:
@@ -27,7 +28,9 @@ Metadata:
         ConfigureCloudtrail:
           default: 'Configure CloudTrail?'
         ConfigureConfig:
-          default: 'Configure AWS Config?'
+          default: 'Configure Config?'
+        ConfigureGuardDuty:
+          default: 'Configure GuardDuty?'
         QSS3BucketName:
           default: Quick Start S3 Bucket Name
         QSS3KeyPrefix:
@@ -65,17 +68,25 @@ Parameters:
     - 'Yes'
     - 'No'
 
+  ConfigureGuardDuty:
+    Type: String
+    Default: 'No'
+    Description: Configures GuardDuty regionally.
+    AllowedValues:
+    - 'Yes'
+    - 'No'
+
   QSS3BucketName:
     AllowedPattern: "^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$"
     ConstraintDescription: "Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
-    Default: "quickstart-reference"
+    Default: "rdb-cis-benchmark"
     Description: "S3 bucket name for the Quick Start assets. Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-)."
     Type: String
 
   QSS3KeyPrefix:
     AllowedPattern: "^[0-9a-zA-Z-/]*$"
     ConstraintDescription: "Quick Start key prefix can include numbers, lowercase letters, uppercase letters, hyphens (-), and forward slash (/)."
-    Default: "enterprise-accelerator/cis/benchmark/latest/"
+    Default: ""
     Description: "S3 key prefix for the Quick Start assets. Quick Start key prefix can include numbers, lowercase letters, uppercase letters, hyphens (-), and forward slash (/)."
     Type: String
 
@@ -149,6 +160,7 @@ Resources:
       Parameters:
         ProfileLevel: !Ref ProfileLevel
         NotificationEmailAddressForCloudWatchAlarms: !Ref NotificationEmailAddressForCloudWatchAlarms
+        ConfigureGuardDuty: !Ref ConfigureGuardDuty
 
   PreRequisitesForCISBenchmark:
     Type: AWS::CloudFormation::Stack

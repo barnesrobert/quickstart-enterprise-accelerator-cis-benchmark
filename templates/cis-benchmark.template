@@ -14,16 +14,13 @@ Metadata:
         Parameters:
           - NotificationEmailAddressForCloudWatchAlarms
 
-      - Label:
-            default: (Optional) Configure AWS Cloudtrail and AWS Config
-        Parameters:
-          - ConfigureCloudtrailAndConfig
-
     ParameterLabels:
         ProfileLevel:
           default: Profile Level
         NotificationEmailAddressForCloudWatchAlarms:
           default: Notification Address
+        ConfigureGuardDuty:
+          default: 'Configure GuardDuty?'
 
 Parameters:
 
@@ -41,9 +38,19 @@ Parameters:
     AllowedPattern: ([a-zA-Z0-9_\-\.]+)@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.)|(([a-zA-Z0-9\-]+\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\]?)
     ConstraintDescription: Must be a valid email address!
 
+  ConfigureGuardDuty:
+    Type: String
+    Default: 'No'
+    Description: Configures GuardDuty regionally.
+    AllowedValues:
+    - 'Yes'
+    - 'No'
+
+
 Conditions:
   IsLevel2: !Equals ["Level 2", !Ref "ProfileLevel"]
   IsGovCloud: !Equals [ us-gov-west-1, !Ref 'AWS::Region' ]
+  ShouldConfigureGuardDuty: !Equals [ 'Yes', !Ref ConfigureGuardDuty ]
 
 Resources:
 
@@ -60,15 +67,16 @@ Resources:
           - Effect: Allow
             Principal:
               Service:
+                - config.amazonaws.com
                 - lambda.amazonaws.com
             Action:
               - 'sts:AssumeRole'
       ManagedPolicyArns:
         - !Sub
-          - arn:${Partition}:iam::aws:policy/AmazonEC2ReadOnlyAccess
+          - arn:${Partition}:iam::aws:policy/service-role/AWSConfigRole
           - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
         - !Sub
-          - arn:${Partition}:iam::aws:policy/AWSCloudTrailReadOnlyAccess
+          - arn:${Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess
           - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
         - !Sub
           - arn:${Partition}:iam::aws:policy/IAMReadOnlyAccess
@@ -90,15 +98,6 @@ Resources:
                   - 'kms:GetKeyRotationStatus'
                   - 'kms:ListKeys'
                 Resource: '*'
-        - PolicyName: S3ReadOnly
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - 's3:GetBucketAcl'
-                  - 's3:GetBucketLogging'
-                Resource: '*'
 
 #==================================================================================================
 # Function: EvaluateCisBenchmarkingPreconditions
@@ -114,7 +113,7 @@ Resources:
     DependsOn:
       - MasterConfigRole
     Properties:
-      FunctionName: CIS-EvaluateCISBenchmarkPreconditions
+      FunctionName: WELLNESS-EvaluateCISBenchmarkPreconditions
       Code:
         ZipFile: |
           import json
@@ -180,7 +179,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-GetCloudTrailCloudWatchLog
+      FunctionName: WELLNESS-GetCloudTrailCloudWatchLog
       Code:
         ZipFile: |
           #Function to find and return CloudWatch log name
@@ -234,7 +233,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateUserMfaUsage
+      FunctionName: WELLNESS-EvaluateUserMfaUsage
       Code:
         ZipFile: |
             import json
@@ -290,7 +289,7 @@ Resources:
   ConfigRuleForEvaluateMFAAllUsers:
     Type: 'AWS::Config::ConfigRule'
     Properties:
-      ConfigRuleName: CIS-UsersMustHaveMfaEnabled
+      ConfigRuleName: WELLNESS-UsersMustHaveMfaEnabled
       Description: >-
         CIS 1.2 - Ensure multi-factor authentication (MFA) is enabled for all IAM users that have a password (Scored)
       Scope:
@@ -329,7 +328,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-DisableUnusedCredentials
+      FunctionName: WELLNESS-DisableUnusedCredentials
       Description: >-
         Evaluates whether users with password enabled have credentials unused for 90 days or greater
       Code:
@@ -412,7 +411,7 @@ Resources:
       - EvaluateUnusedCredentialsLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-DisableUnusedCredentials
+      ConfigRuleName: WELLNESS-DisableUnusedCredentials
       Description: >-
         CIS 1.3 - Ensure credentials unused for 90 days or greater are disabled (Scored)
       Scope:
@@ -448,7 +447,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-RotateAccessKeys
+      FunctionName: WELLNESS-RotateAccessKeys
       Description: >-
         Evaluates whether users have unused active access keys for 90 days or greater
       Code:
@@ -526,7 +525,7 @@ Resources:
       - EvaluateAccessKeysLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-RotateAccessKeys
+      ConfigRuleName: WELLNESS-RotateAccessKeys
       Description: >-
         CIS 1.4 - Ensure access keys are rotated every 90 days or less (Scored)
       Scope:
@@ -555,7 +554,7 @@ Resources:
       Type: AWS::Config::ConfigRule
       DependsOn: ResourceForEvaluateCISBenchmarkPreconditions
       Properties:
-        ConfigRuleName: CIS-IamPasswordPolicyMustMeetRequirements
+        ConfigRuleName: WELLNESS-IamPasswordPolicyMustMeetRequirements
         Description: Evaluates whether the account password policy for IAM users meets the specified CIS requirements 1.5 through 1.11
         Scope:
           ComplianceResourceTypes:
@@ -596,7 +595,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateRootAccount
+      FunctionName: WELLNESS-EvaluateRootAccount
       Code:
         ZipFile: |
 
@@ -683,7 +682,7 @@ Resources:
         - EvaluateRootAccountLambdaInvokePermission
         - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-RootAccoutMustHaveMfaEnabled
+      ConfigRuleName: WELLNESS-RootAccoutMustHaveMfaEnabled
       Description: >-
          CIS 1.12 - Ensure no root account access key exists (Scored) ,
          CIS 1.13 - Ensure  MFA is enabled for the 'root' account (Scored) ,
@@ -718,7 +717,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateUserPolicyAssociations
+      FunctionName: WELLNESS-EvaluateUserPolicyAssociations
       Description: >-
         Evaluates whether users have policies associated with them. Users should
         inherit permissions from groups instead.
@@ -785,7 +784,7 @@ Resources:
       - EvaluateUserPolicyAssociationLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-UsersMustNotHaveAssociatedPolicies
+      ConfigRuleName: WELLNESS-UsersMustNotHaveAssociatedPolicies
       Description: >-
         CIS 1.16 - Ensure IAM policies are attached only to groups or roles (Scored)
       Scope:
@@ -810,7 +809,7 @@ Resources:
         - MasterConfigRole
         - ResourceForEvaluateCISBenchmarkPreconditions
       Properties:
-        FunctionName: CIS-EvaluateInstanceRoleUse
+        FunctionName: WELLNESS-EvaluateInstanceRoleUse
         Code:
           ZipFile: |
             #==================================================================================================
@@ -875,7 +874,7 @@ Resources:
         - FunctionForInstanceRoleUseRule
         - ConfigPermissionToCallInstanceRoleUseLambda
       Properties:
-        ConfigRuleName: CIS-InstancesMustUseIamRoles
+        ConfigRuleName: WELLNESS-InstancesMustUseIamRoles
         Description: CIS 1.21  Ensure IAM instance roles are used for AWS resource access from instances
         Scope:
           ComplianceResourceTypes:
@@ -909,7 +908,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateSupportRoleExists
+      FunctionName: WELLNESS-EvaluateSupportRoleExists
       Description: >-
         Evaluates whether users / groups / roles have the 'AWSSupportAccess' policy associated.
       Code:
@@ -999,7 +998,7 @@ Resources:
       - EvaluateAwsSupportAccessPolicyLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-AwsSupportRoleExists
+      ConfigRuleName: WELLNESS-AwsSupportRoleExists
       Description: >-
         CIS 1.22 - Ensure a support role has been created to manage incidents with AWS Support (Scored)
       Scope:
@@ -1037,7 +1036,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateFullAdminPolicyPermissions
+      FunctionName: WELLNESS-EvaluateFullAdminPolicyPermissions
       Description: >-
         Evaluates whether policies allowing full admin privileges '*:*' have
         been created
@@ -1099,7 +1098,7 @@ Resources:
       - EvaluateFullAdminPrivilegesPoliciesLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-EvaluateFullAdminPrivilegesPolicies
+      ConfigRuleName: WELLNESS-EvaluateFullAdminPrivilegesPolicies
       Description: >-
         CIS 1.24 - Ensure IAM policies that allow full '*:*' administrative privileges are not created (Scored)
       Scope:
@@ -1136,7 +1135,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateCloudTrail
+      FunctionName: WELLNESS-EvaluateCloudTrail
       Code:
         ZipFile: |
           #==================================================================================================
@@ -1233,7 +1232,7 @@ Resources:
         - EvaluateCloudTrailEnabledIntegratedLambdaInvokePermission
         - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-CloudTrailMustBeActive
+      ConfigRuleName: WELLNESS-CloudTrailMustBeActive
       Description: >-
         CIS 2.1, 2.4 - Ensure CloudTrail is enabled in all regions (Scored), ensure CloudTrail trails are integrated with CloudWatch Logs (Scored)
       Scope:
@@ -1272,7 +1271,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateCloudTrailBucket
+      FunctionName: WELLNESS-EvaluateCloudTrailBucket
       Description: Evaluates whether access logging is enabled on the CloudTrail S3 bucket and the S3 bucket is not publicly accessible for CIS 2.3, 2.6
       Code:
         ZipFile: |
@@ -1355,7 +1354,7 @@ Resources:
       - EvaluateCloudTrailS3AccessLoggingLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-CloudTrailBucketMustBeSecure
+      ConfigRuleName: WELLNESS-CloudTrailBucketMustBeSecure
       Description: >-
         ConfigRule to evaluate whether access logging is enabled on the CloudTrail S3 bucket and the S3 bucket is not publicly accessible for CIS 2.3, 2.6
       Scope:
@@ -1394,7 +1393,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateCloudTrailLogIntegrity
+      FunctionName: WELLNESS-EvaluateCloudTrailLogIntegrity
       Description: Evaluates whether CloudTrail logs are validated and encrypted at rest
       Code:
         ZipFile: |
@@ -1458,7 +1457,7 @@ Resources:
       - EvaluateCloudTrailLogsEncryptionValidationLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-CloudTrailLogsMustBeValidatedAndEncrypted
+      ConfigRuleName: WELLNESS-CloudTrailLogsMustBeValidatedAndEncrypted
       Description: >-
         CIS 2.2, 2.7 - Ensure CloudTrail log file validation is enabled (Scored), ensure CloudTrail logs are encrypted at rest using KMS CMKs (Scored)
       Scope:
@@ -1496,7 +1495,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateKmsCustomerKeyRotation
+      FunctionName: WELLNESS-EvaluateKmsCustomerKeyRotation
       Description: >-
         Evaluates whether existing customer managed keys (CMKs) have key
         rotation enabled
@@ -1583,7 +1582,7 @@ Resources:
       - EvaluateCMKsRotationLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-KmsCustomerKeysMustBeRotated
+      ConfigRuleName: WELLNESS-KmsCustomerKeysMustBeRotated
       Description: >-
         CIS 2.8 - Ensure rotation for customer created CMKs is enabled (Scored).
       Scope:
@@ -1607,7 +1606,7 @@ Resources:
     DependsOn:
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-SecurityGroupsMustRestrictSshTraffic
+      ConfigRuleName: WELLNESS-SecurityGroupsMustRestrictSshTraffic
       Description: >-
         CIS 4.1 - Ensure no security groups allow ingress from 0.0.0.0/0 to port 22 (Scored)
       Scope:
@@ -1625,7 +1624,7 @@ Resources:
     DependsOn:
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-SecurityGroupsMustDisallowTcpTraffic
+      ConfigRuleName: WELLNESS-SecurityGroupsMustDisallowTcpTraffic
       Description: >-
         CIS 4.2 - Ensure no security groups allow ingress from 0.0.0.0/0 to port 3389 (Scored)
       InputParameters:
@@ -1660,7 +1659,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateVpcFlowLogs
+      FunctionName: WELLNESS-EvaluateVpcFlowLogs
       Description: Evaluates whether VPC flow logging is enabled
       Code:
         ZipFile: |
@@ -1723,7 +1722,7 @@ Resources:
       - EvaluateVpcFlowLogsLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-EvaluateVpcFlowLogs
+      ConfigRuleName: WELLNESS-EvaluateVpcFlowLogs
       Description: >-
         CIS 4.3 - Ensure VPC flow logging is enabled in all VPCs (Scored)
       Scope:
@@ -1761,7 +1760,7 @@ Resources:
       - MasterConfigRole
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      FunctionName: CIS-EvaluateVpcDefaultSecurityGroups
+      FunctionName: WELLNESS-EvaluateVpcDefaultSecurityGroups
       Description: Evaluates whether VPC default security groups restrict all traffic
       Code:
         ZipFile: |
@@ -1811,7 +1810,7 @@ Resources:
       - EvaluateVpcFlowLogsLambdaInvokePermission
       - ResourceForEvaluateCISBenchmarkPreconditions
     Properties:
-      ConfigRuleName: CIS-VpcDefaultSecurityGroupsMustRestrictAllTraffic
+      ConfigRuleName: WELLNESS-VpcDefaultSecurityGroupsMustRestrictAllTraffic
       Description: >-
         CIS 4.4 - Ensure the default security group of every VPC restricts all traffic (Scored)
       Scope:
@@ -1836,7 +1835,7 @@ Resources:
         - MasterConfigRole
         - ResourceForEvaluateCISBenchmarkPreconditions
       Properties:
-        FunctionName: CIS-EvaluateVpcPeeringRouteTables
+        FunctionName: WELLNESS-EvaluateVpcPeeringRouteTables
         Code:
           ZipFile: |
             #==================================================================================================
@@ -1902,7 +1901,7 @@ Resources:
         - FunctionForVpcPeeringRouteTablesRule
         - ConfigPermissionToCallVpcPeeringRouteTablesLambda
       Properties:
-        ConfigRuleName: CIS-VpcPeeringRouteTablesMustBeLeastAccess
+        ConfigRuleName: WELLNESS-VpcPeeringRouteTablesMustBeLeastAccess
         Description: Evaluates whether VPC peered route tables are least access
         Scope:
           ComplianceResourceTypes:
@@ -1928,7 +1927,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      AlarmName: CIS-Unauthorized Activity Attempt
+      AlarmName: WELLNESS-Unauthorized Activity Attempt
       AlarmDescription: Alarm if Multiple unauthorized actions or logins attempted
       MetricName: UnauthorizedAttemptCount
       Namespace: CloudTrailMetrics
@@ -1949,7 +1948,7 @@ Resources:
     Properties:
       LogGroupName: !GetAtt ResourceForGetCloudWatchLogName.LogName
       FilterPattern: >-
-        { ($.errorCode = "*UnauthorizedOperation") || ($.errorCode = "AccessDenied*") }
+        { ($.errorCode = "*UnauthorizedOperation") || ($.errorCode = "AccessDenied*") && ($.eventName != "GetKeyRotationStatus") && ($.eventName != "GetBucketAcl")}
       MetricTransformations:
         - MetricValue: '1'
           MetricNamespace: CloudTrailMetrics
@@ -1964,7 +1963,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      AlarmName: CIS-Console Signin Without MFA
+      AlarmName: WELLNESS-Console Signin Without MFA
       AlarmDescription: Alarm if there is a Management Console sign-in without MFA
       MetricName: ConsoleSigninWithoutMFA
       Namespace: CloudTrailMetrics
@@ -2004,7 +2003,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      AlarmName: CIS-IAM Root Activity
+      AlarmName: WELLNESS-IAM Root Activity
       AlarmDescription: Alarm if a 'root' user uses the account
       MetricName: RootUserEventCount
       Namespace: CloudTrailMetrics
@@ -2040,7 +2039,7 @@ Resources:
   IamPolicyChangesCloudWatchEventRule:
       Type: AWS::Events::Rule
       Properties:
-        Name: CIS-DetectIamPolicyChanges
+        Name: WELLNESS-DetectIamPolicyChanges
         Description: Publishes formatted IAM policy change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2078,7 +2077,7 @@ Resources:
   CloudTrailCloudWatchEventRule:
       Type: AWS::Events::Rule
       Properties:
-        Name: CIS-DetectCloudTrailChanges
+        Name: WELLNESS-DetectCloudTrailChanges
         Description: Publishes formatted CloudTrail change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2104,7 +2103,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      AlarmName: CIS-Console Login Failures
+      AlarmName: WELLNESS-Console Login Failures
       AlarmDescription: Alarm if there are AWS Management Console authentication failures
       MetricName: ConsoleLoginFailures
       Namespace: CloudTrailMetrics
@@ -2142,7 +2141,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      AlarmName: CIS-KMS Key Disabled or Scheduled for Deletion
+      AlarmName: WELLNESS-KMS Key Disabled or Scheduled for Deletion
       AlarmDescription: Alarm if customer created CMKs get disabled or scheduled for deletion
       MetricName: KMSCustomerKeyDeletion
       Namespace: CloudTrailMetrics
@@ -2177,7 +2176,7 @@ Resources:
   DetectS3BucketPolicyChanges:
       Type: AWS::Events::Rule
       Properties:
-        Name: CIS-DetectS3BucketPolicyChanges
+        Name: WELLNESS-DetectS3BucketPolicyChanges
         Description: Publishes formatted S3 bucket policy change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2208,7 +2207,7 @@ Resources:
       Type: AWS::Events::Rule
       Condition: IsLevel2
       Properties:
-        Name: CIS-DetectConfigChanges
+        Name: WELLNESS-DetectConfigChanges
         Description: Publishes formatted Config change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2234,7 +2233,7 @@ Resources:
       Type: AWS::Events::Rule
       Condition: IsLevel2
       Properties:
-        Name: CIS-DetectSecurityGroupChanges
+        Name: WELLNESS-DetectSecurityGroupChanges
         Description: Publishes formatted security group change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2262,7 +2261,7 @@ Resources:
       Type: AWS::Events::Rule
       Condition: IsLevel2
       Properties:
-        Name: CIS-DetectNetworkAclChanges
+        Name: WELLNESS-DetectNetworkAclChanges
         Description: Publishes formatted network ACL change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2291,7 +2290,7 @@ Resources:
   NetworkChangeCloudWatchEventRule:
       Type: AWS::Events::Rule
       Properties:
-        Name: CIS-DetectNetworkChangeEvents
+        Name: WELLNESS-DetectNetworkChangeEvents
         Description: Publishes formatted network change events to an SNS topic
         EventPattern:
           detail-type:
@@ -2332,7 +2331,7 @@ Resources:
         - ResourceForEvaluateCISBenchmarkPreconditions
         - ResourceForGetCloudWatchLogName
     Properties:
-      TopicName: CIS-NotificationTopic
+      TopicName: WELLNESS-NotificationTopic
       Subscription:
         - Endpoint: !Ref NotificationEmailAddressForCloudWatchAlarms
           Protocol: email
@@ -2361,7 +2360,7 @@ Resources:
             - { Partition: !If [ IsGovCloud, aws-us-gov, aws ] }
         Policies:
           -
-            PolicyName: CIS-AllowSnsPublish
+            PolicyName: WELLNESS-AllowSnsPublish
             PolicyDocument:
               Version: 2012-10-17
               Statement:
@@ -2376,7 +2375,7 @@ Resources:
         - RoleForCloudWatchEvents
         - AlarmNotificationTopic
       Properties:
-        FunctionName: CIS-FormatCloudWatchEvent
+        FunctionName: WELLNESS-FormatCloudWatchEvent
         Code:
           ZipFile: !Sub |
             #==================================================================================================
@@ -2416,3 +2415,80 @@ Resources:
         FunctionName: !GetAtt FunctionToFormatCloudWatchEvent.Arn
         Action: lambda:InvokeFunction
         Principal: events.amazonaws.com
+
+  #==================================================
+  # Enable GuardDuty
+  #==================================================
+  GuardDuty:
+    Type: AWS::GuardDuty::Detector
+    Condition: ShouldConfigureGuardDuty
+    Properties:
+      Enable: true
+
+  # Create a CloudWatch rule for GuardDuty events.
+  DetectGuardDutyEvents:
+    Type: AWS::Events::Rule
+    Condition: ShouldConfigureGuardDuty
+    DependsOn:
+      - GuardDuty
+    Properties:
+      Name: WELLNESS-DetectGuardDutyActivities
+      Description: Publishes formatted GuardDuty events to an SNS topic
+      EventPattern:
+        source:
+          - aws.guardduty
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt FunctionToFormatCloudWatchEvent.Arn
+          Id: TargetFunctionV1
+
+  #==================================================
+  # Enable Macie Alarms (Macie automation is not yet supported)
+  #==================================================
+  # Create a CloudWatch rule for Macie events.
+  DetectGuardDutyEvents:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: WELLNESS-DetectMacieActivities
+      Description: Publishes formatted Macie events to an SNS topic
+      EventPattern:
+        source:
+          - aws.macie
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt FunctionToFormatCloudWatchEvent.Arn
+          Id: TargetFunctionV1
+
+  #==================================================
+  # Additional Config Rules
+  #==================================================
+  ConfigRuleForS3BucketPublicRead:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: WELLNESS-S3BucketPublicReadProhibited
+      Description: Checks that your S3 buckets do not allow public read access. If an S3 bucket policy or bucket ACL allows public read access, the bucket is noncompliant.
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_PUBLIC_READ_PROHIBITED
+
+  ConfigRuleForS3BucketPublicWrite:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: WELLNESS-S3BucketPublicWriteProhibited
+      Description: Checks that your S3 buckets do not allow public write access. If an S3 bucket policy or bucket ACL allows public write access, the bucket is noncompliant.
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_PUBLIC_WRITE_PROHIBITED
+
+  ConfigRuleForS3ServerSideEncryptionEnabled:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: WELLNESS-S3ServerSideEncryptionEnabled
+      Description: Checks whether the S3 bucket policy denies the put-object requests that are not encrypted using AES-256 or AWS KMS.
+      Source:
+        Owner: AWS
+        SourceIdentifier: S3_BUCKET_SERVER_SIDE_ENCRYPTION_ENABLED
+      Scope:
+        ComplianceResourceTypes:
+          - AWS::S3::Bucket
+
